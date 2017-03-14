@@ -18,7 +18,9 @@ import { hideNimStatus, showNimStatus } from './nimStatus';
 
 class NimSuggestProcessDescription {
     process: cp.ChildProcess;
-    rpc: elrpc.RPCServer;
+    //rpc: elrpc.RPCServer;
+    port: number;
+    failCounter: number;
 }
 
 let nimSuggestProcessCache: { [project: string]: PromiseLike<NimSuggestProcessDescription> } = {};
@@ -145,7 +147,7 @@ export function initNimSuggest(ctx: vscode.ExtensionContext) {
         if (fs.existsSync(nimCacheDir)) {
             removeDirSync(nimCacheDir);
         }
-        let cmd = '"' + getNimExecPath()  + '" c -d:release --path:"' + path.dirname(path.dirname(getNimExecPath())) + '" nimsuggest.nim';
+        let cmd = '"' + getNimExecPath() + '" c -d:release --path:"' + path.dirname(path.dirname(getNimExecPath())) + '" nimsuggest.nim';
         showNimStatus('Compiling nimsuggest', '');
         cp.exec(cmd, { cwd: nimSuggestDir }, (error, stdout, stderr) => {
             hideNimStatus();
@@ -184,23 +186,49 @@ export async function execNimSuggest(suggestType: NimSuggestType, filename: stri
         let normalizedFilename = filename.replace(/\\+/g, '/');
         let desc = await getNimSuggestProcess(projectFile);
         trace(desc.process.pid, projectFile, NimSuggestType[suggestType] + ' ' + normalizedFilename + ':' + line + ':' + column);
-        let ret = await desc.rpc.callMethod(new elparser.ast.SExpSymbol(NimSuggestType[suggestType]), normalizedFilename, line, column, dirtyFile);
-        trace(desc.process.pid, projectFile + '=' + NimSuggestType[suggestType] + ' ' + normalizedFilename, ret);
+        //let ret = await desc.rpc.callMethod(new elparser.ast.SExpSymbol(NimSuggestType[suggestType]), normalizedFilename, line, column, dirtyFile);
+        //trace(desc.process.pid, projectFile + '=' + NimSuggestType[suggestType] + ' ' + normalizedFilename, ret);
 
-        var result: NimSuggestResult[] = [];
-        if (ret != null) {
-            if (ret instanceof Array) {
-                for (var i = 0; i < ret.length; i++) {
-                    var parts = ret[i];
+        let cmd = NimSuggestType[suggestType] + ' "' + filename + '"' + (dirtyFile ? (';"' + dirtyFile + '"') : "") + ":" + line + ":" + column + "\n";
+        let str = "";
+        let resolved = false;
+
+        return new Promise<NimSuggestResult[]>((resolve, reject) => {
+            let socket = net.createConnection(desc.port, "127.0.0.1", () => {
+                socket.end(cmd);
+            });
+
+            socket.on('data', data => { str += data.toString(); });
+            socket.on('error', err => {
+                if (err.message === "ECONNREFUSED") {
+                    if (!!nimSuggestProcessCache[projectFile]) {
+                        desc.failCounter++;
+                        if (desc.failCounter > 5) {
+                            closeNimSuggestProcess(filename);
+                        }
+                    }
+
+                    resolved = true;
+                    resolve([]);
+                }
+            });
+            socket.on('end', () => {
+                resolved = true;
+
+                let result: NimSuggestResult[] = [];
+                let lines = str.split(os.EOL);
+
+                lines.forEach(line => {
+                    let parts = line.split('\t');
                     if (parts.length >= 8) {
                         var item = new NimSuggestResult();
-                        item.answerType = parts[0];
+                        item.answerType = NimSuggestResult[parseInt(parts[0])];
                         item.suggest = parts[1];
-                        item.names = parts[2];
+                        item.names = [parts[2]];
                         item.path = parts[3].replace(/\\,\\/g, '\\');
                         item.type = parts[4];
-                        item.line = parts[5];
-                        item.column = parts[6];
+                        item.line = parseInt(parts[5]);
+                        item.column = parseInt(parts[6]);
                         var doc = parts[7];
                         if (doc !== '') {
                             doc = doc.replace(/\\,u000A|\\,u000D\\,u000A/g, '\n');
@@ -210,31 +238,30 @@ export async function execNimSuggest(suggestType: NimSuggestType, filename: stri
                         item.documentation = doc;
                         result.push(item);
                     }
-                }
-            } else if (ret === 'EPC Connection closed') {
-                console.error(ret);
-                await closeNimSuggestProcess(filename);
-            } else {
-                var item = new NimSuggestResult();
-                item.suggest = '' + ret;
-                result.push(item);
-            }
-        }
-        if (!isProjectMode() && vscode.window.visibleTextEditors.every(
-            (value, index, array) => { return value.document.uri.fsPath !== filename; })) {
-            await closeNimSuggestProcess(filename);
-        }
-        return result;
+
+                });
+
+                socket.destroy();
+
+                resolve(result);
+
+                if (!isProjectMode() && vscode.window.visibleTextEditors.every(
+                    (value, index, array) => { return value.document.uri.fsPath !== filename; })
+                )
+                    closeNimSuggestProcess(filename);
+            });
+            socket.on('close', () => { if (onClose) { onClose(); } });
+        });
     } catch (e) {
         console.error(e);
-        await closeNimSuggestProcess(filename);
+        closeNimSuggestProcess(filename);
     }
 }
 
 export async function closeAllNimSuggestProcesses(): Promise<void> {
     for (var project in nimSuggestProcessCache) {
         let desc = await nimSuggestProcessCache[project];
-        desc.rpc.stop();
+        //desc.rpc.stop();
         desc.process.kill();
     }
     nimSuggestProcessCache = {};
@@ -244,39 +271,29 @@ export async function closeNimSuggestProcess(filename: string): Promise<void> {
     var file = getProjectFile(filename);
     if (nimSuggestProcessCache[file]) {
         let desc = await nimSuggestProcessCache[file];
-        desc.rpc.stop();
         desc.process.kill();
         nimSuggestProcessCache[file] = undefined;
     }
 }
 
+let portCounter = 6000;
 async function getNimSuggestProcess(nimProject: string): Promise<NimSuggestProcessDescription> {
     if (!nimSuggestProcessCache[nimProject]) {
         nimSuggestProcessCache[nimProject] = new Promise<NimSuggestProcessDescription>((resolve, reject) => {
-            var args = ['--epc', '--v2'];
+            let port = portCounter++;
+            var args = ['--port:' + port, '--v2', '--address:127.0.0.1'];
             if (!!vscode.workspace.getConfiguration('nim').get('logNimsuggest')) {
                 args.push('--log');
             }
             args.push(nimProject);
             let process = cp.spawn(getNimSuggestPath(), args, { cwd: vscode.workspace.rootPath });
-            process.stdout.once('data', (data) => {
-                elrpc.startClient(parseInt(data.toString())).then((client) => {
-                    client.socket.on('error', err => {
-                        console.error(err);
-                    });
-                    resolve({ process: process, rpc: client });
-                }, (reason: any) => {
-                    reject(reason);
-                });
-            });
+
             process.on('close', () => {
-                if (nimSuggestProcessCache[nimProject]) {
-                    nimSuggestProcessCache[nimProject].then((desc) => {
-                        desc.rpc.stop();
-                    });
-                }
                 reject();
             });
+
+            //return { process: process, port: port };
+            resolve({ process: process, port: port, failCounter: 0 });
         });
     }
     return nimSuggestProcessCache[nimProject];
