@@ -186,8 +186,6 @@ export async function execNimSuggest(suggestType: NimSuggestType, filename: stri
         let normalizedFilename = filename.replace(/\\+/g, '/');
         let desc = await getNimSuggestProcess(projectFile);
         trace(desc.process.pid, projectFile, NimSuggestType[suggestType] + ' ' + normalizedFilename + ':' + line + ':' + column);
-        //let ret = await desc.rpc.callMethod(new elparser.ast.SExpSymbol(NimSuggestType[suggestType]), normalizedFilename, line, column, dirtyFile);
-        //trace(desc.process.pid, projectFile + '=' + NimSuggestType[suggestType] + ' ' + normalizedFilename, ret);
 
         let cmd = NimSuggestType[suggestType] + ' "' + filename + '"' + (dirtyFile ? (';"' + dirtyFile + '"') : "") + ":" + line + ":" + column + "\n";
         let str = "";
@@ -229,9 +227,9 @@ export async function execNimSuggest(suggestType: NimSuggestType, filename: stri
                         item.path = parts[4].replace(/\\,\\/g, '\\');
                         item.line = parseInt(parts[5]);
                         item.column = parseInt(parts[6]);
-                        var doc = parts[7];
+                        var doc = parts[7].substring(1, parts[7].length - 1);
                         if (doc !== '') {
-                            doc = doc.replace(/\\,u000A|\\,u000D\\,u000A/g, '\n');
+                            doc = doc.replace(/\\x0A|\\x0D\\x0A/g, '\n');
                             doc = doc.replace(/\`\`/g, '`');
                             doc = doc.replace(/\`([^\<\`]+)\<([^\>]+)\>\`\_/g, '\[$1\]\($2\)');
                         }
@@ -243,18 +241,18 @@ export async function execNimSuggest(suggestType: NimSuggestType, filename: stri
 
                 socket.destroy();
 
-                resolve(result);
-
                 if (!isProjectMode() && vscode.window.visibleTextEditors.every(
                     (value, index, array) => { return value.document.uri.fsPath !== filename; })
                 )
                     closeNimSuggestProcess(filename);
+
+                resolve(result);
             });
             socket.on('close', () => { if (onClose) { onClose(); } });
         });
     } catch (e) {
         console.error(e);
-        closeNimSuggestProcess(filename);
+        await closeNimSuggestProcess(filename);
     }
 }
 
