@@ -224,9 +224,9 @@ export async function execNimSuggest(suggestType: NimSuggestType, filename: stri
                         var item = new NimSuggestResult();
                         item.answerType = parts[0];
                         item.suggest = parts[1];
-                        item.names = [parts[2]];
-                        item.path = parts[3].replace(/\\,\\/g, '\\');
-                        item.type = parts[4];
+                        item.names = [/(.+)\..+/.exec(parts[2])[1], /.+\.(.+)/.exec(parts[2])[1]];
+                        item.type = parts[3];
+                        item.path = parts[4].replace(/\\,\\/g, '\\');
                         item.line = parseInt(parts[5]);
                         item.column = parseInt(parts[6]);
                         var doc = parts[7];
