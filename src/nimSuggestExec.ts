@@ -222,7 +222,7 @@ export async function execNimSuggest(suggestType: NimSuggestType, filename: stri
                     let parts = line.split('\t');
                     if (parts.length >= 8) {
                         var item = new NimSuggestResult();
-                        item.answerType = NimSuggestResult[parseInt(parts[0])];
+                        item.answerType = parts[0];
                         item.suggest = parts[1];
                         item.names = [parts[2]];
                         item.path = parts[3].replace(/\\,\\/g, '\\');
