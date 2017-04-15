@@ -14,6 +14,7 @@ import { NimCompletionItemProvider } from './nimSuggest';
 import { NimDefinitionProvider } from './nimDeclaration';
 import { NimReferenceProvider } from './nimReferences';
 import { NimHoverProvider } from './nimHover';
+import { NimRenameProvider } from './nimRename'; 
 import { NimDocumentSymbolProvider, NimWorkspaceSymbolProvider } from './nimOutline';
 import * as indexer from './nimIndexer';
 import { NimSignatureHelpProvider } from './nimSignature';
@@ -36,6 +37,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
     ctx.subscriptions.push(vscode.languages.registerDocumentSymbolProvider(NIM_MODE, new NimDocumentSymbolProvider()));
     ctx.subscriptions.push(vscode.languages.registerSignatureHelpProvider(NIM_MODE, new NimSignatureHelpProvider(), '(', ','));
     ctx.subscriptions.push(vscode.languages.registerHoverProvider(NIM_MODE, new NimHoverProvider()));
+    ctx.subscriptions.push(vscode.languages.registerRenameProvider(NIM_MODE, new NimRenameProvider()))
     diagnosticCollection = vscode.languages.createDiagnosticCollection('nim');
     ctx.subscriptions.push(diagnosticCollection);
 
