@@ -173,6 +173,100 @@ function trace(pid: number, projectFile: string, msg: any): void {
     }
 }
 
+function rstToMarkdown(rst: string): string {
+    let lines = rst.split(os.EOL);
+    if (lines.length === 1) {
+        let lfSplit = rst.split('\n');
+        if (lfSplit.length > 1)
+            lines = lfSplit;
+    }
+    let startSpacing = 0;
+    let lastSpacing = 0;
+    let inCodeBlock = false;
+    let markdown = '';
+    let block = '';
+
+    function flushBlock() {
+        block = block.replace(/\`([^\<\`]+)\<([^\>]+)\>\`\_/g, '\[$1\]\($2\)');
+        block = block.replace(/\`\`/g, '`');
+        block = block.replace(/:idx:?/, '');
+
+        markdown += block;
+        block = '';
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+        let spacing = /(\s*)/.exec(lines[i])[1].length;
+
+        if (inCodeBlock && spacing === startSpacing && !/^\s*$/.exec(lines[i])) {
+            inCodeBlock = false;
+            markdown += '```\n';
+        }
+        if (inCodeBlock)
+            markdown += lines[i] + '\n';
+
+        lastSpacing = spacing;
+
+        if (!inCodeBlock) {
+            let codeBlock = /(\s*)\.\.\s*code-block::\s*(\w+)?/.exec(lines[i]);
+            let textBlock = /:(:\s*)$/.exec(lines[i]);
+            if (codeBlock || textBlock) {
+                flushBlock();
+
+                if (codeBlock)
+                    markdown += codeBlock[1] + '```' + (codeBlock[2] ? codeBlock[2] : 'nim') + '\n';
+                else
+                    markdown += lines[i].substring(0, lines[i].length - textBlock[1].length) + '\n```text\n';
+
+                startSpacing = spacing;
+                inCodeBlock = true;
+                continue;
+            }
+
+            let listItem = /^(\s*)(-|\(\d)\s(.+)/.exec(lines[i]);
+            if (listItem) {
+                flushBlock();
+                if (listItem[1] === '-')
+                    markdown += listItem[1] + '* ' + listItem[3] + '\n';
+                else
+                    markdown += listItem[1] + listItem[2] + '. ' + listItem[3] + '\n';
+                continue;
+            }
+
+            let tag = /^(\s*):(.+:)\s*(.+)/.exec(lines[i]);
+            if (tag) {
+                flushBlock();
+                markdown += tag[1] + ' * **' + tag[2] + '** ' + tag[3] + '\n';
+                continue;
+            }
+
+            if (i + 1 < lines.length) {
+                let header = /^(\s*)==+/.exec(lines[i + 1]);
+                if (header) {
+                    flushBlock();
+                    markdown += '# ' + lines[i] + '\n';
+                    ++i;
+                    continue;
+                }
+                let subheader = /^(\s*)--+/.exec(lines[i + 1]);
+                if (subheader) {
+                    flushBlock();
+                    markdown += '## ' + lines[i] + '\n';
+                    ++i;
+                    continue;
+                }
+            }
+
+            block += lines[i] + '\n';
+        }
+    }
+    if (inCodeBlock)
+        markdown += '```';
+    flushBlock();
+
+    return markdown;
+}
+
 export async function execNimSuggest(suggestType: NimSuggestType, filename: string,
     line: number, column: number, dirtyFile?: string): Promise<NimSuggestResult[]> {
     var nimSuggestExec = getNimSuggestPath();
@@ -203,12 +297,10 @@ export async function execNimSuggest(suggestType: NimSuggestType, filename: stri
                         item.type = parts[4];
                         item.line = parts[5];
                         item.column = parts[6];
-                        var doc = parts[7];
-                        if (doc !== '') {
-                            doc = doc.replace(/\`\`/g, '`');
-                            doc = doc.replace(/\.\. code-block:: (\w+)\r?\n(( .*\r?\n?)+)/g, '```$1\n$2\n```\n');
-                            doc = doc.replace(/\`([^\<\`]+)\<([^\>]+)\>\`\_/g, '\[$1\]\($2\)');
-                        }
+                        var doc: string = parts[7];
+                        if (doc !== '')
+                            doc = rstToMarkdown(doc);
+
                         item.documentation = doc;
                         result.push(item);
                     }
